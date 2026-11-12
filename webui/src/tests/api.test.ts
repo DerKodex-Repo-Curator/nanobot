@@ -134,7 +134,7 @@ describe("webui API helpers", () => {
   });
 
   it("revalidates prompt summaries and replaces only the changed suffix", async () => {
-    const prompt = { id: "u1", preview: "question", answerPreview: "", cursor: "cursor", turnId: "t1", createdAt: 1 };
+    const prompt = { id: "u1", inputId: "user:t1", preview: "question", answerPreview: "", cursor: "cursor", turnId: "t1", createdAt: 1 };
     const cached = { revision: "first", prompts: [prompt] };
     const signal = new AbortController().signal;
     vi.mocked(fetch).mockResolvedValueOnce({ status: 304 } as Response);
@@ -146,6 +146,7 @@ describe("webui API helpers", () => {
     }) } as Response);
     const appended = await fetchPromptIndex("tok", "websocket:chat-1", signal, cached);
     expect(appended.prompts.map((item) => item.id)).toEqual(["u1", "u2"]);
+    expect(appended.prompts[1].inputId).toBe("user:t1");
     expect(appended.prompts[0]).toBe(prompt);
     vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: async () => ({ revision: "third", replaceFrom: 1, prompts: [] }) } as Response);
     expect((await fetchPromptIndex("tok", "websocket:chat-1", signal, appended)).prompts).toEqual([prompt]);
@@ -201,6 +202,7 @@ describe("webui API helpers", () => {
   it.each([
     {},
     { stream_id: "answer-1" },
+    { stream_id: "answer-1", text_from_seq: 2 },
     { projection_receipts: [] },
     { stream_id: "answer-1", projection_receipts: [{ turn_id: "turn-1", ranges: [[1, 3], [5, 5]] }] },
   ])("accepts optional stream identity and projection receipts: %j", async (metadata) => {
@@ -232,6 +234,25 @@ describe("webui API helpers", () => {
     );
   });
 
+  it("preserves the fragment answer-recovery declaration at the HTTP boundary", () => {
+    const payload = { schemaVersion: 3, projection: "events", events: [],
+      page: { record_range: { turn: 0, start: 2, end: 4002 }, recovered_answers: true } };
+    expect(parseWebuiThreadPayload(payload).page).toEqual(payload.page);
+    expect(() => parseWebuiThreadPayload({ ...payload, page: { ...payload.page, recovered_answers: "true" } }))
+      .toThrow("Invalid WebUI thread answer recovery");
+  });
+
+  it.each(["stream_end", "reasoning_end"])("validates %s text snapshot coverage", (event) => {
+    const payload = (fields: Record<string, unknown>) => ({ schemaVersion: 3, projection: "events",
+      events: [{ event, chat_id: "chat-1", turn_id: "turn-1", turn_seq: 6, text: "Reply", ...fields }] });
+    expect(parseWebuiThreadPayload(payload({ text_from_seq: 2 })).events[0])
+      .toMatchObject({ text_from_seq: 2, turn_seq: 6 });
+    for (const fields of [{ text_from_seq: -1 }, { text_from_seq: 7 }, { text_from_seq: 2.5 },
+      { text_from_seq: 2, turn_seq: undefined }]) {
+      expect(() => parseWebuiThreadPayload(payload(fields))).toThrow(`Invalid WebUI thread projection event: ${event}`);
+    }
+  });
+
   it.each([
     null,
     "backup",
@@ -259,7 +280,7 @@ describe("webui API helpers", () => {
     [{ provider: "xai", model: "grok", preset: "snapshot", fallback: true }],
     [{ provider: "xai", model: "grok", preset: "legacy snapshot" }],
   ])("accepts optional recorded response sources: %j", async (response_sources) => {
-    const event = { event: "stream_end", chat_id: "chat-1", text: "Reply", response_sources };
+    const event = { event: "stream_end", chat_id: "chat-1", text: "Reply", response_sources, response_input_ids: ["session-message:received"] };
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -695,7 +716,7 @@ describe("webui API helpers", () => {
       contextWindowTokens: 128000,
       temperature: 0.4,
       reasoningEffort: "high",
-    });
+    }, true);
 
     expect(requestMutation).toHaveBeenCalledWith(
       "settings.model_configuration.create",
@@ -703,6 +724,8 @@ describe("webui API helpers", () => {
         name: "Fast writing",
         provider: "openai",
         model: "openai/gpt-4.1-mini",
+        append_to_order: true,
+        include_usage: false,
         max_tokens: 4096,
         context_window_tokens: 128000,
         temperature: 0.4,
@@ -722,12 +745,13 @@ describe("webui API helpers", () => {
       contextWindowTokens: 65536,
       temperature: 0,
       reasoningEffort: null,
-    });
+    }, true);
 
     expect(requestMutation).toHaveBeenCalledWith(
       "settings.model_configuration.update",
       {
         name: "codex",
+        include_usage: false,
         new_name: "Codex",
         provider: "openai_codex",
         model: "openai-codex/gpt-5.5",

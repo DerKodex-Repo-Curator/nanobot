@@ -631,7 +631,8 @@ class SubagentManager:
         except SubagentControlError as exc:
             return ToolResult.error(f"Error: {exc}")
         status = record.status
-        return f"Subagent [{status.label}] started (id: {status.task_id}). I'll notify you when it completes."
+        return (f"Subagent [{status.label}] started (id: {status.task_id}). "
+                "I'll notify you when it completes. Don't duplicate its work.")
 
     async def run_inline(
         self,
@@ -908,7 +909,7 @@ class SubagentManager:
 
         # Inject as system message to trigger main agent.
         # Use session_key_override to align with the main agent's effective
-        # session key (which accounts for unified sessions) so the result is
+        # session key (including any explicit override) so the result is
         # routed to the correct pending queue (mid-turn injection) instead of
         # being dispatched as a competing independent task.
         override = origin.get("session_key") or f"{origin['channel']}:{origin['chat_id']}"

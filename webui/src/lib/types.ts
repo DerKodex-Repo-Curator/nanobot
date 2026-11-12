@@ -120,6 +120,10 @@ export interface UIMessage {
   renderAs?: "text";
   /** Invocation-time snapshots, never resolved from today's model presets. */
   responseSources?: ResponseSource[];
+  /** Stable input identity, independent of its arrival or execution turn. */
+  inputId?: string;
+  /** Inputs actually consumed by this response. An empty list means no user input. */
+  responseInputIds?: string[];
   kind?: MessageKind;
   isStreaming?: boolean;
   createdAt: number;
@@ -904,7 +908,6 @@ export interface SettingsPayload {
     dream: {
       schedule: string;
     };
-    unified_session: boolean;
   };
   usage?: {
     days: Array<{
@@ -1517,6 +1520,7 @@ export type InboundEvent =
   | {
       event: "attached";
       chat_id: string;
+      request_id?: string;
       temporary?: boolean;
       recovery_state?: RecoveryState;
       usage?: TurnUsage;
@@ -1544,6 +1548,7 @@ export type InboundEvent =
       mcp_presets?: UIMcpPresetAttachment[];
       session_mentions?: SessionMention[];
       provenance?: { session_message?: UISessionMessage };
+      input_id?: string;
     } & InboundTurnMetadata)
   | ({
       event: "message";
@@ -1564,6 +1569,7 @@ export type InboundEvent =
       /** Lightweight provenance for proactive assistant messages. */
       source?: UIMessageSource;
       response_sources?: ResponseSource[];
+      response_input_ids?: string[];
       /** Optional structured payload on progress frames (channel-specific). */
       agent_ui?: AgentUIBlob;
     } & InboundTurnMetadata)
@@ -1582,15 +1588,19 @@ export type InboundEvent =
       /** Lightweight provenance for proactive streamed assistant messages. */
       source?: UIMessageSource;
       response_sources?: ResponseSource[];
+      response_input_ids?: string[];
     } & InboundTurnMetadata)
   | ({
       event: "stream_end";
       chat_id: string;
       stream_id?: string;
       text?: string;
+      /** Inclusive first turn sequence covered by this stream's cumulative text. */
+      text_from_seq?: number;
       /** Lightweight provenance for proactive streamed assistant messages. */
       source?: UIMessageSource;
       response_sources?: ResponseSource[];
+      response_input_ids?: string[];
       /** This answer segment ended, but the active agent turn will continue. */
       resuming?: boolean;
       /** The next answer segment continues this same assistant message. */
@@ -1606,8 +1616,8 @@ export type InboundEvent =
       event: "reasoning_end";
       chat_id: string;
       stream_id?: string;
-      /** Legacy persisted transcripts may carry the final reasoning text here. */
       text?: string;
+      text_from_seq?: number;
     } & InboundTurnMetadata)
   | { event: "pairing_changed" }
   | {
@@ -1695,6 +1705,7 @@ export type InboundEvent =
     }
   | {
       event: "error";
+      request_id?: string;
       chat_id?: string;
       detail?: string;
       reason?: string;
@@ -1754,7 +1765,17 @@ export interface OutboundMcpPresetMention {
   brand_color?: string | null;
 }
 
+export interface WebuiThreadRecordRange {
+  turn: number;
+  start: number;
+  end: number;
+}
+
 interface WebuiThreadPagePayload {
+  history_generation?: string | null;
+  record_range?: WebuiThreadRecordRange;
+  /** The fragment includes the canonical replacement for this turn's stored answers. */
+  recovered_answers?: boolean;
   before_cursor?: string | null;
   has_more_before?: boolean;
   after_cursor?: string | null;
@@ -1766,6 +1787,7 @@ interface WebuiThreadPagePayload {
 
 export interface PromptSummary {
   id: string;
+  inputId?: string;
   preview: string;
   answerPreview: string;
   createdAt: number;
@@ -1820,15 +1842,15 @@ export type FilePreviewPayload = FilePreviewMetadata & (
 );
 
 export type Outbound =
-  | { type: "new_chat"; workspace_scope?: WorkspaceScopePayload }
-  | { type: "new_temporary_chat" }
+  | { type: "new_chat"; workspace_scope?: WorkspaceScopePayload; request_id?: string }
+  | { type: "new_temporary_chat"; request_id?: string }
   | {
       type: "webui_request";
       request_id: string;
       action: string;
       payload: Record<string, unknown>;
     }
-  | { type: "fork_chat"; source_chat_id: string; before_user_index: number; title?: string }
+  | { type: "fork_chat"; source_chat_id: string; before_user_index: number; title?: string; request_id?: string }
   | { type: "attach"; chat_id: string }
   | { type: "set_sidebar_state"; state: SidebarStatePayload }
   | { type: "discard_temporary_chat"; chat_id: string }
